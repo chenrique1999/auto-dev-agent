@@ -1,0 +1,196 @@
+import OpenAI from "openai";
+import { exec as _exec } from "node:child_process";
+import { promisify } from "node:util";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const exec = promisify(_exec);
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+if (!OPENAI_API_KEY) {
+  console.error("Falta OPENAI_API_KEY no ambiente.");
+  process.exit(1);
+}
+const client = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+const REPO_DIR = process.env.REPO_DIR || process.cwd();
+const MODEL_PRIMARY = process.env.AGENT_MODEL || "gpt-5-mini";
+const MAX_STEPS = parseInt(process.env.AGENT_MAX_STEPS || "40", 10);
+
+// ---------------- tools (com nome, descrição e schema válidos) ----------------
+const TOOL_DEFS = [
+  {
+    type: "function",
+    function: {
+      name: "run_shell",
+      description: "Executa um comando de shell e retorna stdout/stderr e exitCode.",
+      parameters: {
+        type: "object",
+        properties: {
+          cmd: { type: "string", description: "Comando completo para executar." },
+          cwd: { type: "string", description: "Diretório de trabalho. Default: REPO_DIR", nullable: true }
+        },
+        required: ["cmd"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description: "Escreve um arquivo de texto. Cria diretórios se não existirem.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Caminho do arquivo relativo ao repo." },
+          content: { type: "string", description: "Conteúdo a gravar." },
+          mode: { type: "string", description: "replace|append (default replace).", enum: ["replace","append"], nullable: true }
+        },
+        required: ["path","content"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Lê um arquivo de texto e retorna conteúdo (até maxBytes).",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Caminho relativo ao repo." },
+          maxBytes: { type: "integer", description: "Máximo de bytes a ler. Default 200000.", nullable: true }
+        },
+        required: ["path"],
+        additionalProperties: false
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "git_commit_push",
+      description: "Faz git add/commit/push com a mensagem informada.",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "Mensagem do commit.", nullable: true }
+        },
+        required: [],
+        additionalProperties: false
+      }
+    }
+  }
+];
+
+// ---------------- helpers ----------------
+async function run(cmd, cwd = REPO_DIR) {
+  const { stdout, stderr } = await exec(cmd, { cwd, env: process.env, maxBuffer: 10 * 1024 * 1024 });
+  return { exitCode: 0, stdout, stderr };
+}
+
+async function writeFileSafe(rel, content, mode = "replace") {
+  const abs = path.resolve(REPO_DIR, rel);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  if (mode === "append") {
+    await fs.appendFile(abs, content);
+  } else {
+    await fs.writeFile(abs, content);
+  }
+  return `wrote ${rel} (${content.length} bytes, mode=${mode})`;
+}
+
+async function readFileSafe(rel, maxBytes = 200000) {
+  const abs = path.resolve(REPO_DIR, rel);
+  const buf = await fs.readFile(abs);
+  const truncated = buf.length > maxBytes;
+  const content = buf.slice(0, maxBytes).toString("utf8");
+  return JSON.stringify({ path: rel, size: buf.length, truncated, content });
+}
+
+async function gitCommitPush(message = "agent update") {
+  try {
+    await exec("git init", { cwd: REPO_DIR });
+    await exec("git add -A", { cwd: REPO_DIR });
+    await exec(`git -c user.email="agent@local" -c user.name="Agent" commit -m ${JSON.stringify(message)}`, { cwd: REPO_DIR });
+  } catch (e) {
+    // pode ser "nothing to commit"; seguimos
+  }
+  try {
+    const { stdout } = await exec("git rev-parse --abbrev-ref --symbolic-full-name @{u}", { cwd: REPO_DIR });
+    if (stdout) await exec("git push", { cwd: REPO_DIR });
+  } catch (e) {
+    // sem remote; ignore
+  }
+  return "git add/commit/push OK (ou nada a commitar)";
+}
+
+// ---------------- loop do agente ----------------
+async function runTask(task) {
+  const messages = [
+    { role: "system", content:
+`Você é um agente de code ops. Trabalhe no diretório ${REPO_DIR}.
+Use ferramentas para criar/editar/rodar código. Sempre mostrar logs curtos.
+Corrija e repita se der erro.` },
+    { role: "user", content: task }
+  ];
+
+  for (let step = 0; step < MAX_STEPS; step++) {
+    const resp = await client.chat.completions.create({
+      model: MODEL_PRIMARY,
+      messages,
+      tools: TOOL_DEFS,
+      tool_choice: "auto",
+    });
+
+    const msg = resp.choices[0].message;
+
+    if (msg.content) {
+      console.log(`[AI] ${msg.content}`);
+      messages.push({ role: "assistant", content: msg.content });
+    }
+
+    const calls = msg.tool_calls || [];
+    if (!calls.length) {
+      // terminou
+      return resp;
+    }
+
+    // executar cada tool_call e anexar resposta "tool"
+    for (const call of calls) {
+      const fn = call.function?.name;
+      const argStr = call.function?.arguments || "{}";
+      let args = {};
+      try { args = JSON.parse(argStr); } catch { args = {}; }
+
+      let output = "";
+      try {
+        if (fn === "run_shell")       output = JSON.stringify(await run(args.cmd, args.cwd || REPO_DIR));
+        else if (fn === "write_file") output = await writeFileSafe(args.path, args.content, args.mode || "replace");
+        else if (fn === "read_file")  output = await readFileSafe(args.path, args.maxBytes || 200000);
+        else if (fn === "git_commit_push") output = await gitCommitPush(args.message || "agent update");
+        else output = `unknown tool: ${fn}`;
+      } catch (e) {
+        output = `tool error: ${e?.message || String(e)}`;
+      }
+
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: output
+      });
+    }
+  }
+
+  throw new Error("maxSteps reached");
+}
+
+// ---------------- CLI ----------------
+if (process.argv[1] === new URL(import.meta.url).pathname) {
+  const task = process.argv.slice(2).join(" ")
+    || 'Inicialize um projeto Node com Express (porta 3000) no diretório de trabalho; crie server.js com rota GET /health que responde {"status":"ok"}; adicione script "start" no package.json; rode "npm i"; inicie "node server.js" em segundo plano, teste com "curl http://localhost:3000/health", mostre os logs e encerre o processo depois do teste. Corrija qualquer erro que aparecer.';
+  console.log("> Task:", task);
+  await runTask(task);
+}

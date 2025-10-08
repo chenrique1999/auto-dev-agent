@@ -1,0 +1,238 @@
+import 'dotenv/config';
+import OpenAI from 'openai';
+import { execa } from 'execa';
+import { promises as fs } from 'fs';
+import path from 'node:path';
+import simpleGit from 'simple-git';
+import { fetch } from 'undici';
+
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Diretório de trabalho
+const REPO_DIR = process.env.REPO_DIR || process.cwd();
+
+// Modelos e limites (com defaults sensatos)
+const MODEL_FAST   = process.env.MODEL_FAST  || 'gpt-5-mini';
+const MODEL_SMART  = process.env.MODEL_SMART || 'gpt-5';
+const ERR_LIMIT    = parseInt(process.env.SWITCH_AFTER_ERRORS || '2', 10);
+const BYTE_LIMIT   = parseInt(process.env.LARGE_EDIT_BYTES    || '60000', 10);
+const MAX_STEPS    = parseInt(process.env.AGENT_MAX_STEPS     || '20', 10);
+
+// ---------- helpers ----------
+async function run(cmd, cwd = REPO_DIR) {
+  try {
+    const { stdout, stderr, exitCode } = await execa(cmd, { shell: true, cwd, env: process.env });
+    return { ok: exitCode === 0, stdout, stderr, exitCode };
+  } catch (e) {
+    return {
+      ok: false,
+      stdout: e.stdout || '',
+      stderr: e.stderr || String(e),
+      exitCode: e.exitCode ?? -1
+    };
+  }
+}
+async function exists(p) { try { await fs.access(p); return true; } catch { return false; } }
+
+async function writeFileSafe(relPath, content, mode = 'replace') {
+  const abs = path.join(REPO_DIR, relPath);
+  await fs.mkdir(path.dirname(abs), { recursive: true });
+  if (mode === 'append' && (await exists(abs))) {
+    const prev = await fs.readFile(abs, 'utf8');
+    await fs.writeFile(abs, prev + content, 'utf8');
+  } else {
+    await fs.writeFile(abs, content, 'utf8');
+  }
+  return `wrote ${relPath} (${content.length} chars, mode=${mode})`;
+}
+
+async function readFileSafe(relPath, maxBytes = 200000) {
+  const abs = path.join(REPO_DIR, relPath);
+  const buf = await fs.readFile(abs);
+  return buf.slice(0, maxBytes).toString('utf8');
+}
+
+async function gitCommitPush(message = 'agent: update') {
+  const git = simpleGit(REPO_DIR);
+  await git.add('.');
+  const status = await git.status();
+  if (status.staged.length === 0) return 'no changes to commit';
+  await git.commit(message);
+  try {
+    await git.push();
+    return `pushed: ${message}`;
+  } catch (e) {
+    return `commit ok, push failed: ${e}`;
+  }
+}
+
+async function deployRender() {
+  const url = process.env.RENDER_DEPLOY_HOOK;
+  if (!url) return 'RENDER_DEPLOY_HOOK not set';
+  const r = await fetch(url, { method: 'POST' });
+  return `render hook status: ${r.status}`;
+}
+
+async function deployNetlify(dir = REPO_DIR) {
+  const hasToken = !!process.env.NETLIFY_AUTH_TOKEN;
+  const hasSite  = !!process.env.NETLIFY_SITE_ID;
+  if (hasToken && hasSite) {
+    const out = await run(`netlify deploy --dir="${dir}" --site ${process.env.NETLIFY_SITE_ID} --prod --auth ${process.env.NETLIFY_AUTH_TOKEN}`);
+    return out.stdout || out.stderr;
+  } else {
+    const out = await run(`netlify deploy --dir="${dir}" --prod`);
+    return out.stdout || out.stderr;
+  }
+}
+
+// ---------- tools ----------
+const tools = [
+  { type: 'function', function: {
+      name: 'run_shell',
+      description: 'Executa comando de shell',
+      parameters: { type: 'object', properties: { cmd: { type: 'string' }, cwd: { type: 'string' } }, required: ['cmd'] }
+  }},
+  { type: 'function', function: {
+      name: 'write_file',
+      description: 'Escreve arquivo relativo ao REPO_DIR',
+      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, mode: { type: 'string', enum: ['replace','append'], default: 'replace' } }, required: ['path','content'] }
+  }},
+  { type: 'function', function: {
+      name: 'read_file',
+      description: 'Lê arquivo',
+      parameters: { type: 'object', properties: { path: { type: 'string' }, maxBytes: { type: 'integer', default: 200000 } }, required: ['path'] }
+  }},
+  { type: 'function', function: {
+      name: 'git_commit_push',
+      description: 'Commit + push',
+      parameters: { type: 'object', properties: { message: { type: 'string' } } }
+  }},
+  { type: 'function', function: {
+      name: 'deploy_render',
+      description: 'Deploy no Render via hook',
+      parameters: { type: 'object', properties: {} }
+  }},
+  { type: 'function', function: {
+      name: 'deploy_netlify',
+      description: 'Deploy no Netlify via CLI',
+      parameters: { type: 'object', properties: { dir: { type: 'string' } } }
+  }},
+];
+
+// ---------- heurística de falha ----------
+function toolOutputIndicatesFailure(output) {
+  try {
+    const o = JSON.parse(output);
+    if (typeof o === 'object' && o) {
+      if (o.ok === false) return true;
+      if (typeof o.exitCode === 'number' && o.exitCode !== 0) return true;
+      if (o.stderr && String(o.stderr).trim()) return true;
+    }
+  } catch {}
+  if (/tool error/i.test(output)) return true;
+  if (/(^|\n)(ERR|Error|Traceback|failed)(:|\b)/i.test(output) && !/0 failed/i.test(output)) return true;
+  return false;
+}
+
+// ---------- loop principal ----------
+async function runTask(userText, maxSteps = MAX_STEPS) {
+  let failures = 0;
+  let editedBytes = 0;
+  let currentModel = MODEL_FAST;
+
+  const messages = [
+    { role: 'system', content:
+`Você é um agente de engenharia que trabalha EXCLUSIVAMENTE dentro de ${REPO_DIR}.
+Objetivo: implementar o pedido do usuário, rodar install/build/test/lint, ler stderr e corrigir. Deploy só quando explicitamente pedido.
+Regras:
+- Use as ferramentas disponíveis (run_shell, read/write_file, git_commit_push, deploy_*).
+- Não saia de ${REPO_DIR}. Evite comandos destrutivos.
+- Explique brevemente cada ação (logs curtos).
+- Se der erro, corrija e repita.` },
+    { role: 'user', content: userText }
+  ];
+
+  console.log(`[AI] using model: ${currentModel}`);
+
+  for (let step = 0; step < maxSteps; step++) {
+    let resp;
+    try {
+      resp = await client.chat.completions.create({
+        model: currentModel,
+        messages,
+        tools,
+        tool_choice: 'auto'
+      });
+    } catch (e) {
+      // Se a chamada falhar (ex.: limitações do modelo), escale para o SMART uma vez
+      const code = e?.code || e?.error?.code || e?.status || 'unknown';
+      console.error(`[AI] OpenAI error (${code}).`);
+      if (currentModel !== MODEL_SMART) {
+        currentModel = MODEL_SMART;
+        console.log(`[AI] [switch] escalando para ${MODEL_SMART} (motivo: openai error: ${code})`);
+        messages.push({ role: 'system', content: 'Houve um erro do provedor. Replaneje cuidadosamente e continue a tarefa.' });
+        continue; // tenta novamente no próximo loop
+      }
+      throw e;
+    }
+
+    const msg = resp.choices[0].message;
+    if (msg.content) console.log(`[AI] ${msg.content}`);
+
+    // *** CRÍTICO: empilhar a MENSAGEM COMPLETA (com tool_calls) ***
+    messages.push(msg);
+
+    const calls = msg.tool_calls ?? [];
+    if (!calls.length) return resp; // terminou
+
+    let roundFailed = false;
+
+    for (const call of calls) {
+      const fn = call.function?.name;
+      const argStr = call.function?.arguments || '{}';
+      const tool_call_id = call.id;
+
+      let args = {};
+      try { args = JSON.parse(argStr); } catch {}
+
+      if (fn === 'write_file' && args.content) {
+        editedBytes += Buffer.byteLength(args.content, 'utf8');
+      }
+
+      let output = '';
+      try {
+        if (fn === 'run_shell')            output = JSON.stringify(await run(args.cmd, args.cwd || REPO_DIR));
+        else if (fn === 'write_file')      output = await writeFileSafe(args.path, args.content, args.mode || 'replace');
+        else if (fn === 'read_file')       output = await readFileSafe(args.path, args.maxBytes || 200000);
+        else if (fn === 'git_commit_push') output = await gitCommitPush(args.message || 'agent update');
+        else if (fn === 'deploy_render')   output = await deployRender();
+        else if (fn === 'deploy_netlify')  output = await deployNetlify(args.dir);
+        else                               output = `unknown tool: ${fn}`;
+      } catch (e) {
+        output = `tool error: ${e?.message || String(e)}`;
+      }
+
+      if (toolOutputIndicatesFailure(output)) roundFailed = true;
+
+      messages.push({ role: 'tool', tool_call_id, content: output });
+    }
+
+    if (roundFailed) failures++;
+
+    // Auto-switch por falhas/bytes
+    if ((failures >= ERR_LIMIT || editedBytes >= BYTE_LIMIT) && currentModel !== MODEL_SMART) {
+      currentModel = MODEL_SMART;
+      console.log(`[AI] [switch] escalando para ${MODEL_SMART} (motivo: ${failures >= ERR_LIMIT ? 'falhas' : 'edição grande'})`);
+      messages.push({ role: 'system', content: 'A partir de agora use um raciocínio mais cuidadoso e detalhado. Continue a tarefa.' });
+    }
+  }
+
+  throw new Error('maxSteps reached');
+}
+
+// ---------- CLI ----------
+if (process.argv[1] === new URL(import.meta.url).pathname) {
+  const task = process.argv.slice(2).join(' ') || 'Crie rota /health no Express e rode npm start.';
+  console.log('> Task:', task);
+  await runTask(task);
+}

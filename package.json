@@ -1,0 +1,21 @@
+{
+  "name": "auto-dev-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "agent": "node agent.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "execa": "^9.6.0",
+    "express": "^5.1.0",
+    "openai": "^4.104.0",
+    "simple-git": "^3.28.0",
+    "undici": "^7.16.0"
+  }
+}
