@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    environment:
+      - PORT=7777
+      - AGENT_PORT=7777
+    ports:
+      - "7777:7777"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL","wget -qO- http://localhost:7777/health | grep -q '\"ok\":true'"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
