@@ -1,0 +1,4 @@
+  chore/hardening-and-dx              b5233d1 chore(compose): publicar 7777 e healthcheck
+  chore/hardening-and-dx-202510091418 b5233d1 chore(compose): publicar 7777 e healthcheck
+* chore/hardening-and-dx-202510091420 5af051a chore(ignore): git/docker ignore robustos e untrack node_modules
+  master                              a328bff feat: add GET /version endpoint returning { version: '1.0.0' } and verify with curl

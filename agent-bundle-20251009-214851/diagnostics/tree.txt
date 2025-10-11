@@ -1,0 +1,90 @@
+.
+├── .backup
+│   ├── agent.mjs.1759936391
+│   ├── agent.mjs.1759938698
+│   ├── agent.mjs.1759938769
+│   ├── agent.mjs.1759939324
+│   ├── package.json.1759936391
+│   ├── server.mjs.1759936391
+│   ├── server.mjs.1759937927
+│   ├── server.mjs.1759938065
+│   ├── server.mjs.1759938669
+│   ├── server.mjs.1759941258
+│   ├── server.mjs.1759943121
+│   ├── server.mjs.1759945783
+│   ├── server.mjs.1759946141
+│   ├── server.mjs.1759946929
+│   ├── server.mjs.1759946937
+│   ├── server.mjs.1759948807
+│   ├── server.mjs.1759949199
+│   ├── server.mjs.1759949244
+│   ├── server.mjs.1759949325
+│   ├── server.mjs.1759949893
+│   ├── server.mjs.1759956274
+│   ├── server.mjs.1759958271
+│   ├── server.mjs.1759958335
+│   ├── server.mjs.1759974889
+│   ├── server.mjs.1759974951
+│   ├── server.mjs.1759974983
+│   ├── server.mjs.1759980847
+│   ├── server.mjs.1759981146
+│   ├── server.mjs.1759981221
+│   ├── server.mjs.1759981250
+│   ├── server.mjs.1759990141
+│   ├── server.mjs.1760020799
+│   └── server.mjs.1760020808
+├── .dockerignore
+├── .DS_Store
+├── .env
+├── .env.bak
+├── .env.bak.1759943701
+├── .env.bak.1759943858
+├── .env.bak.1759965079
+├── .env.bak.1759965209
+├── .env.bak.1759965322
+├── .env.bak.1759967475
+├── .env.bak.1759968130
+├── .env.bak.1759968193
+├── .env.bak.1759971126
+├── .env.bak.1759971335
+├── .env.bak.1759987205
+├── .env.bak.1759987294
+├── .env.bak.1759988106
+├── .env.bak.1759988636
+├── .env.bak.1759988822
+├── .env.bak.1759988876
+├── .env.bak.1759989164
+├── .gitignore
+├── agent-bundle-20251009-214851
+│   └── diagnostics
+│       ├── env.txt
+│       ├── git-branch.txt
+│       ├── git-last-commit.txt
+│       ├── git-status.txt
+│       └── tree.txt
+├── agent.mjs
+├── docker-compose.yml
+├── docker-compose.yml.bak
+├── Dockerfile
+├── Dockerfile.bak
+├── package-lock.json
+├── package.json
+├── package.json.bak
+├── public
+│   └── viewer.html
+├── README.md
+├── repro.sh
+├── response.txt
+├── scripts
+│   └── fix-auth.mjs
+├── server.js
+├── server.log
+├── server.mjs
+├── server.mjs.bak
+├── server.mjs.bak.1760021287
+├── server.run.log
+├── src
+│   └── hello.js
+├── task.txt
+└── tests
+    └── api.test.cjs

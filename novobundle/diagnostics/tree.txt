@@ -1,0 +1,10 @@
+.
+./tests
+./novobundle
+./novobundle/diagnostics
+./public
+./scripts
+./agent-bundle-20251009-214851
+./agent-bundle-20251009-214851/diagnostics
+./.backup
+./src

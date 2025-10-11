@@ -11,6 +11,12 @@ app.get('/version', (req, res) => {
     res.json({ version: '1.0.0' });
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
-});
+// Export app for testing
+module.exports = app;
+
+// Only start server if run directly
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`Server is running on http://localhost:${PORT}`);
+    });
+}

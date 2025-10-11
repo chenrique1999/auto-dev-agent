@@ -1,0 +1,96 @@
+Objetivo: No REPO_DIR (/Users/carloshenrique/Dev/meu-repo-de-teste), criar um orquestrador “autocurativo” que, ao receber o comando para ATIVAR TUDO, garanta:
+- portas abertas (3000 app, 5050 health),
+- serviços rodando (app real se existir; se não, dummy),
+- túnel Cloudflare “app-fixo” ativo,
+- readiness (HTTP 200) local e público,
+- testes rápidos (TTFB/latência) e logs.
+
+### Regras gerais
+- Não tocar no app principal se já existir; apenas usar se disponível.
+- Tudo em ESM (Node 20); sem libs pesadas. Pode usar pino para logs locais dos serviços.
+- Cross-platform (mac/Win) no que for possível; matar por porto + pidfile.
+- Nunca sobrescrever sem backup `.bak`.
+
+### Arquivos/estruturas a criar/ajustar
+
+1) `ops/stack.config.json` (se não existir)
+   Conteúdo-base:
+   {
+     "app": {
+       "port": 3000,
+       "readyURL": "http://127.0.0.1:3000/",
+       "start": ["auto", "npm", "run", "dev"],        // “auto”: tente usar dev/start do package.json; senão cai para dummy
+       "fallback": ["node", "tooling/app-dummy/index.mjs"]
+     },
+     "health": {
+       "port": 5050,
+       "readyURL": "http://127.0.0.1:5050/health",
+       "start": ["node", "tooling/health-server/index.mjs"]
+     },
+     "tunnel": {
+       "name": "app-fixo",
+       "validate": ["cloudflared", "tunnel", "ingress", "validate"],
+       "start": ["cloudflared", "tunnel", "run", "app-fixo"],
+       "publicApp": "https://app.galaxifyos.com/",
+       "publicHealth": "https://health.galaxifyos.com/health"
+     }
+   }
+   - Se já existir, apenas adicione chaves ausentes.
+
+2) `tooling/health-server/` (se ausente)
+   - package.json { "type":"module", "scripts": {"start":"node index.mjs"}, "dependencies":{"express":"^5","pino":"^9","dotenv":"^16"} }
+   - index.mjs: Express 5 em PORT=env||5050; GET /health -> {ok:true, service:"health-server", time, node}; GET /envcheck (apenas nomes); logger pino.
+
+3) `tooling/app-dummy/` (se ausente)
+   - package.json { "type":"module","scripts":{"start":"node index.mjs"},"dependencies":{"express":"^5","pino":"^9"} }
+   - index.mjs: Express 5 em PORT=env||3000; GET / -> "app ok"; GET /health -> {ok:true, service:"app-dummy", time, node}; logger pino.
+
+4) `ops/ensure.mjs` (ESM)
+   Funções:
+   - checkPort(port): tenta conectar em 127.0.0.1:port (net).
+   - waitHTTP200(url, timeout): checa 200 com http/https.
+   - spawnBg(cmdArray, pidfile): inicia em bg, salva PID em `.run/*.pid` (criar pasta `.run`).
+   - killByPidfile(pidfile) e killByPort(port).
+   - resolveAppStart():
+       * Se package.json do REPO_DIR tem scripts.dev → usar ["npm","run","dev"].
+       * Senão se scripts.start → ["npm","run","start"].
+       * Senão usar `stack.config.json.app.start`. Se start[0]==="auto", pular para fallback.
+       * Sempre ter fallback (tooling/app-dummy) se readiness falhar.
+   Subcomandos:
+   - `up`: 
+       1) garantir health: se porta 5050 fechada → start; aguardar `waitHTTP200(health.readyURL)`.
+       2) garantir app: tentar comando “real” (resolveAppStart). Se após Xs não estiver 200 → matar e usar fallback; aguardar pronto.
+       3) validar túnel (`cloudflared tunnel ingress validate`); se não rodando → start; aguardar 200 em publicApp/publicHealth.
+       4) imprimir sumário (local/público códigos + tempos).
+   - `down`: matar pids (app/health/túnel) e liberar portas 3000/5050.
+   - `status`: listar ouvintes das portas; checar local/public URLs (mostrar code e tempo).
+   - `test`: 5 requisições com tempos (média) em app/health locais e públicos; salvar:
+       * `AUTO_TUNNEL_TEST.json` (resultados brutos)
+       * `TUNNEL_TEST_REPORT.md` (tabela simples)
+   Observações:
+   - Usar `child_process.spawn` (stdio pipe) e registrar logs mínimos em `./.run/*.log`.
+   - Timeout padrão: local 30s; público 60s.
+   - Mensagens claras quando cair para fallback do app.
+
+5) package.json (raiz do REPO_DIR)
+   - Adicionar sem remover existentes:
+     "scripts": {
+       "ensure:up": "node ops/ensure.mjs up",
+       "ensure:down": "node ops/ensure.mjs down",
+       "ensure:status": "node ops/ensure.mjs status",
+       "tunnel:test": "node ops/ensure.mjs test"
+     }
+   - Se faltar, adicionar devDep "concurrently":"^9" (pode ser usada futuramente; não é obrigatória para ensure).
+
+6) `docs/ENSURE.md`
+   - Como usar: `npm run ensure:up | ensure:status | tunnel:test | ensure:down`
+   - Como configurar `ops/stack.config.json` para trocar do dummy para sua app real (alterar `app.start` para ["npm","run","dev"] ou outro).
+   - Troubleshooting: 502 (sem serviço local), `::1` vs `127.0.0.1`, matar portas, logs em `.run/`.
+
+7) Backups `.bak` de arquivos modificados e relatório curto no console com caminhos criados/alterados.
+
+### Critérios de aceitação
+- `npm run ensure:up` sobe health, app (real ou dummy) e túnel; readiness local + público OK.
+- `npm run ensure:status` mostra 200 local/público.
+- Em caso de falha do app real, orquestrador cai para dummy automaticamente (porta 3000 aberta).
+- `npm run tunnel:test` gera `TUNNEL_TEST_REPORT.md` e `AUTO_TUNNEL_TEST.json`.

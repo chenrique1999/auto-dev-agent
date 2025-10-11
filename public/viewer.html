@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Logs SSE</title>
+<style>
+  body{font:14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;background:#0b0e14;color:#e6e6e6;margin:0}
+  header{padding:12px;background:#111;border-bottom:1px solid #222}
+  main{padding:12px;white-space:pre-wrap}
+  .ok{color:#7ee787}.err{color:#ff7b72}
+</style>
+<header>
+  <input id="task" placeholder="taskId" style="width:320px">
+  <button id="go">Conectar</button>
+</header>
+<main id="out"></main>
+<script>
+  const out = document.getElementById('out');
+  document.getElementById('go').onclick = () => {
+    out.textContent = '';
+    const id = document.getElementById('task').value.trim();
+    const token = prompt('AGENT_TOKEN:');
+    const es = new EventSource(`/tasks/${id}/sse`, { withCredentials:false });
+    // Injeta Authorization via fetch? EventSource nativamente não aceita header.
+    // Alternativa rápida: adicionar ?token=... e validar no servidor.
+    // Para demo local sem auth, comente o middleware auth no /sse.
+    alert('Para produção, use long-poll com fetch que aceita headers ou implemente SSE com token via query.');
+  };
+</script>

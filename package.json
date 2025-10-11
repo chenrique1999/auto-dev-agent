@@ -1,33 +1,29 @@
 {
-  "singleQuote": true,
-  "semi": true,
-  "dependencies": {
-    "pino": "^10.0.0",
-    "pino-http": "^11.0.0"
-  },
-  "devDependencies": {
-    "c8": "^10.1.3",
-    "eslint": "^9.37.0",
-    "express-rate-limit": "^8.1.0",
-    "prettier": "^3.6.2",
-    "supertest": "^7.1.4"
-  },
+  "name": "auto-dev-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agente local para aplicar mudanças em repositórios via shell + LLM",
+  "license": "MIT",
+  "engines": { "node": ">=20.10" },
   "scripts": {
     "start": "node server.mjs",
     "dev": "node --watch server.mjs",
+    "agent": "node agent.mjs",
     "test": "node --test",
-    "test:cov": "c8 -r text -r html node --test",
-    "lint": "eslint .",
-    "format": "prettier -w ."
+    "test:api": "node --test tests/api.test.cjs",
+    "doctor": "node scripts/doctor.mjs",
+    "fix:auth": "node scripts/fix-auth.mjs"
   },
-  "eslintConfig": {
-    "env": {
-      "es2022": true,
-      "node": true
-    },
-    "extends": [
-      "eslint:recommended"
-    ]
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "execa": "^9.6.0",
+    "express": "^5.1.0",
+    "openai": "^6.2.0",
+    "simple-git": "^3.28.0",
+    "undici": "^7.16.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.0.0"
   },
   "prettier": {
     "singleQuote": true,
