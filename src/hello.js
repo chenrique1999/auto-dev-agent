@@ -1,1 +1,1 @@
-console.log("hello from agent")
+console.log('hello from agent');

@@ -1,21 +1,31 @@
 {
-  "name": "auto-dev-agent",
-  "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
+  "$schema": "https://json.schemastore.org/package",
+  "name": "galaxify-os",
+  "version": "0.1.0",
+  "private": true,
   "scripts": {
-    "start": "node server.js",
-    "agent": "node agent.mjs"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "dev": "next dev --turbo",
+  "build": "next build --turbo",
+  "start": "next start",
+  "export:zip": "tar -a -c -f ..\\galaxify-os-export.zip --exclude=node_modules --exclude=.next --exclude=.git --exclude=.turbo --exclude=.vercel --exclude=dist --exclude=build --exclude=coverage ."
+},
   "dependencies": {
-    "dotenv": "^17.2.3",
-    "execa": "^9.6.0",
-    "express": "^5.1.0",
-    "openai": "^4.104.0",
-    "simple-git": "^3.28.0",
-    "undici": "^7.16.0"
+    "framer-motion": "^12.23.22",
+    "lucide-react": "^0.544.0",
+    "next": "15.5.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "recharts": "^3.2.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.4",
+    "tailwindcss": "^4",
+    "typescript": "^5"
   }
 }

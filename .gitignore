@@ -1,1 +1,10 @@
+node_modules/
+.DS_Store
+*.log
+coverage/
+dist/
+.tmp/
+.backup/
 .env
+.env.*
+!.env.example

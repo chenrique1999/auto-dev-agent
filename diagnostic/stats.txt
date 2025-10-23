@@ -1,0 +1,24 @@
+--- STATS ---
+ 12K	agent.mjs
+ 55M	backups
+ 56K	bundle
+8,0K	bundle.zip
+ 28K	diagnostic
+4,0K	docker-compose.yml
+4,0K	Dockerfile
+4,0K	docs
+ 88M	node_modules
+8,0K	openapi.json
+108K	package-lock.json
+4,0K	package.json
+ 96K	pens
+4,0K	public
+4,0K	repro.sh
+4,0K	response.txt
+ 36K	scripts
+4,0K	server.js
+4,0K	server.log
+ 12K	server.mjs
+4,0K	server.run.log
+ 16K	src
+8,0K	task.txt

@@ -1,0 +1,39 @@
+{
+  "name": "auto-dev-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agente local para aplicar mudanças em repositórios via shell + LLM",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.10"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "agent": "node agent.mjs",
+    "test": "node --test",
+    "test:api": "node --test tests/api.test.cjs",
+    "doctor": "node scripts/doctor.mjs",
+    "fix:auth": "node scripts/fix-auth.mjs"
+  },
+  "dependencies": {
+    "axios": "^1.12.2",
+    "cheerio": "^1.1.2",
+    "dotenv": "^17.2.3",
+    "execa": "^9.6.0",
+    "express": "^5.1.0",
+    "openai": "^6.2.0",
+    "pino": "^10.0.0",
+    "puppeteer": "^24.24.0",
+    "simple-git": "^3.28.0",
+    "undici": "^7.16.0"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.1.2",
+    "supertest": "^7.0.0"
+  },
+  "prettier": {
+    "singleQuote": true,
+    "semi": true
+  }
+}

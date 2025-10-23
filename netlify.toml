@@ -1,0 +1,10 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["sharp"]
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

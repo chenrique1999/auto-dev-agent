@@ -1,0 +1,12 @@
+{
+  "tracked": [
+    "scripts/organize.mjs",
+    "src/doctor.mjs",
+    "src/fix-auth.mjs",
+    "src/logger.mjs",
+    "test/api.test.mjs",
+    "server.mjs",
+    "agent.mjs",
+    "openapi.json"
+  ]
+}

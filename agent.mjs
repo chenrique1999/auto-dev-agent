@@ -1,238 +1,252 @@
+// agent.mjs — Safe Mode Toolkit (multi-workspace)
 import 'dotenv/config';
-import OpenAI from 'openai';
-import { execa } from 'execa';
-import { promises as fs } from 'fs';
 import path from 'node:path';
-import simpleGit from 'simple-git';
-import { fetch } from 'undici';
+import fs from 'node:fs/promises';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+import { execaCommand } from 'execa';
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// ====== Raiz do agente (pasta deste arquivo)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const AGENT_ROOT = __dirname;
 
-// Diretório de trabalho
-const REPO_DIR = process.env.REPO_DIR || process.cwd();
+// ====== ENV & Defaults ======
+const REPO_DIR = path.resolve(process.env.REPO_DIR || process.cwd());
+const SAFE_MODE = String(process.env.AGENT_SAFE_MODE || 'on').toLowerCase() !== 'off';
+const DRY_RUN = ['1', 'true', 'yes', 'on'].includes(String(process.env.AGENT_DRY_RUN || '0').toLowerCase());
+const MAX_TIMEOUT_MS = Math.max(1_000, Math.min(10 * 60_000, Number(process.env.AGENT_MAX_TIMEOUT_MS || 180_000))); // 1s..10min
+const MAX_OUTPUT_BYTES = Math.max(64 * 1024, Math.min(50 * 1024 * 1024, Number(process.env.AGENT_MAX_OUTPUT_BYTES || 5 * 1024 * 1024))); // 64KB..50MB
+const STRIP_SECRETS = String(process.env.AGENT_STRIP_SECRETS || '1') !== '0';
 
-// Modelos e limites (com defaults sensatos)
-const MODEL_FAST   = process.env.MODEL_FAST  || 'gpt-5-mini';
-const MODEL_SMART  = process.env.MODEL_SMART || 'gpt-5';
-const ERR_LIMIT    = parseInt(process.env.SWITCH_AFTER_ERRORS || '2', 10);
-const BYTE_LIMIT   = parseInt(process.env.LARGE_EDIT_BYTES    || '60000', 10);
-const MAX_STEPS    = parseInt(process.env.AGENT_MAX_STEPS     || '20', 10);
-
-// ---------- helpers ----------
-async function run(cmd, cwd = REPO_DIR) {
-  try {
-    const { stdout, stderr, exitCode } = await execa(cmd, { shell: true, cwd, env: process.env });
-    return { ok: exitCode === 0, stdout, stderr, exitCode };
-  } catch (e) {
-    return {
-      ok: false,
-      stdout: e.stdout || '',
-      stderr: e.stderr || String(e),
-      exitCode: e.exitCode ?? -1
-    };
+function parseList(val) {
+  if (!val) return [];
+  const s = String(val).trim();
+  if (!s) return [];
+  if (s.startsWith('[')) {
+    try { return (JSON.parse(s) || []).map(x => String(x)); } catch { return []; }
   }
+  return s.split(/[;,\n]/).map(x => x.trim()).filter(Boolean);
 }
-async function exists(p) { try { await fs.access(p); return true; } catch { return false; } }
 
-async function writeFileSafe(relPath, content, mode = 'replace') {
-  const abs = path.join(REPO_DIR, relPath);
-  await fs.mkdir(path.dirname(abs), { recursive: true });
-  if (mode === 'append' && (await exists(abs))) {
-    const prev = await fs.readFile(abs, 'utf8');
-    await fs.writeFile(abs, prev + content, 'utf8');
-  } else {
-    await fs.writeFile(abs, content, 'utf8');
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function toMatcher(pat) {
+  const p = String(pat).trim();
+  if (!p) return () => false;
+  if (p.startsWith('re:')) {
+    const rx = new RegExp(p.slice(3), 'i');
+    return (cmd) => rx.test(cmd);
   }
-  return `wrote ${relPath} (${content.length} chars, mode=${mode})`;
-}
-
-async function readFileSafe(relPath, maxBytes = 200000) {
-  const abs = path.join(REPO_DIR, relPath);
-  const buf = await fs.readFile(abs);
-  return buf.slice(0, maxBytes).toString('utf8');
-}
-
-async function gitCommitPush(message = 'agent: update') {
-  const git = simpleGit(REPO_DIR);
-  await git.add('.');
-  const status = await git.status();
-  if (status.staged.length === 0) return 'no changes to commit';
-  await git.commit(message);
-  try {
-    await git.push();
-    return `pushed: ${message}`;
-  } catch (e) {
-    return `commit ok, push failed: ${e}`;
+  const low = p.toLowerCase();
+  if (low.includes('*')) {
+    const rx = new RegExp(low.split('*').map(escapeRe).join('.*'), 'i');
+    return (cmd) => rx.test(cmd.toLowerCase());
   }
+  return (cmd) => cmd.toLowerCase().includes(low);
 }
 
-async function deployRender() {
-  const url = process.env.RENDER_DEPLOY_HOOK;
-  if (!url) return 'RENDER_DEPLOY_HOOK not set';
-  const r = await fetch(url, { method: 'POST' });
-  return `render hook status: ${r.status}`;
-}
-
-async function deployNetlify(dir = REPO_DIR) {
-  const hasToken = !!process.env.NETLIFY_AUTH_TOKEN;
-  const hasSite  = !!process.env.NETLIFY_SITE_ID;
-  if (hasToken && hasSite) {
-    const out = await run(`netlify deploy --dir="${dir}" --site ${process.env.NETLIFY_SITE_ID} --prod --auth ${process.env.NETLIFY_AUTH_TOKEN}`);
-    return out.stdout || out.stderr;
-  } else {
-    const out = await run(`netlify deploy --dir="${dir}" --prod`);
-    return out.stdout || out.stderr;
-  }
-}
-
-// ---------- tools ----------
-const tools = [
-  { type: 'function', function: {
-      name: 'run_shell',
-      description: 'Executa comando de shell',
-      parameters: { type: 'object', properties: { cmd: { type: 'string' }, cwd: { type: 'string' } }, required: ['cmd'] }
-  }},
-  { type: 'function', function: {
-      name: 'write_file',
-      description: 'Escreve arquivo relativo ao REPO_DIR',
-      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, mode: { type: 'string', enum: ['replace','append'], default: 'replace' } }, required: ['path','content'] }
-  }},
-  { type: 'function', function: {
-      name: 'read_file',
-      description: 'Lê arquivo',
-      parameters: { type: 'object', properties: { path: { type: 'string' }, maxBytes: { type: 'integer', default: 200000 } }, required: ['path'] }
-  }},
-  { type: 'function', function: {
-      name: 'git_commit_push',
-      description: 'Commit + push',
-      parameters: { type: 'object', properties: { message: { type: 'string' } } }
-  }},
-  { type: 'function', function: {
-      name: 'deploy_render',
-      description: 'Deploy no Render via hook',
-      parameters: { type: 'object', properties: {} }
-  }},
-  { type: 'function', function: {
-      name: 'deploy_netlify',
-      description: 'Deploy no Netlify via CLI',
-      parameters: { type: 'object', properties: { dir: { type: 'string' } } }
-  }},
+const DEFAULT_DENY = [
+  're:\\brm\\s+-rf\\s+(/|~)\\b',
+  're:\\b(sudo|mkfs|fdisk|mount|umount|shutdown|reboot|poweroff|halt)\\b',
+  're:\\bdd\\s+if=\\/dev\\/',
+  're:\\b(format\\s+c:|del\\s+/s\\s+/q\\s+c:\\\\|rd\\s+/s\\s+/q\\s+c:\\\\)\\b',
+  're:\\|\\s*sh\\b',
+  're:\\|\\s*powershell\\b',
+  're:>\\s*\\/dev\\/(sda|nvme\\w+n\\d+)',
+  're:\\bnc\\b.*-e',
+  're:>&\\s*\\/dev\\/tcp',
+  're::\\(\\)\\{:\\|:&\\};:',
+  're:\\buseradd\\b|\\badduser\\b|\\bgroupadd\\b',
+  're:\\biptables\\b|\\bpfctl\\b|\\broute\\b\\s+add'
 ];
 
-// ---------- heurística de falha ----------
-function toolOutputIndicatesFailure(output) {
+const EXTRA_DENY = parseList(process.env.AGENT_DENY);
+const ALLOW      = parseList(process.env.AGENT_ALLOW); // se não-vazio, exige match
+
+const denyFns = [...DEFAULT_DENY, ...EXTRA_DENY].map(toMatcher);
+const allowFns = ALLOW.map(toMatcher);
+
+// ====== Workspaces permitidos
+function getAllowedDirs() {
+  let list = [];
   try {
-    const o = JSON.parse(output);
-    if (typeof o === 'object' && o) {
-      if (o.ok === false) return true;
-      if (typeof o.exitCode === 'number' && o.exitCode !== 0) return true;
-      if (o.stderr && String(o.stderr).trim()) return true;
+    const raw = process.env.AGENT_WORKSPACES;
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        list = arr
+          .filter(x => x && x.path)
+          .map(x => path.resolve(String(x.path)));
+      }
     }
-  } catch {}
-  if (/tool error/i.test(output)) return true;
-  if (/(^|\n)(ERR|Error|Traceback|failed)(:|\b)/i.test(output) && !/0 failed/i.test(output)) return true;
+  } catch { /* ignore */ }
+  // incluir sempre REPO_DIR e AGENT_ROOT
+  const set = new Set([REPO_DIR, AGENT_ROOT, ...list].map(p => path.resolve(p)));
+  return Array.from(set);
+}
+function insideAllowed(abs, bases = getAllowedDirs()) {
+  const p = path.resolve(abs);
+  for (const base of bases) {
+    const b = path.resolve(base) + path.sep;
+    if (p === path.resolve(base) || p.startsWith(b)) return true;
+  }
   return false;
 }
 
-// ---------- loop principal ----------
-async function runTask(userText, maxSteps = MAX_STEPS) {
-  let failures = 0;
-  let editedBytes = 0;
-  let currentModel = MODEL_FAST;
-
-  const messages = [
-    { role: 'system', content:
-`Você é um agente de engenharia que trabalha EXCLUSIVAMENTE dentro de ${REPO_DIR}.
-Objetivo: implementar o pedido do usuário, rodar install/build/test/lint, ler stderr e corrigir. Deploy só quando explicitamente pedido.
-Regras:
-- Use as ferramentas disponíveis (run_shell, read/write_file, git_commit_push, deploy_*).
-- Não saia de ${REPO_DIR}. Evite comandos destrutivos.
-- Explique brevemente cada ação (logs curtos).
-- Se der erro, corrija e repita.` },
-    { role: 'user', content: userText }
-  ];
-
-  console.log(`[AI] using model: ${currentModel}`);
-
-  for (let step = 0; step < maxSteps; step++) {
-    let resp;
-    try {
-      resp = await client.chat.completions.create({
-        model: currentModel,
-        messages,
-        tools,
-        tool_choice: 'auto'
-      });
-    } catch (e) {
-      // Se a chamada falhar (ex.: limitações do modelo), escale para o SMART uma vez
-      const code = e?.code || e?.error?.code || e?.status || 'unknown';
-      console.error(`[AI] OpenAI error (${code}).`);
-      if (currentModel !== MODEL_SMART) {
-        currentModel = MODEL_SMART;
-        console.log(`[AI] [switch] escalando para ${MODEL_SMART} (motivo: openai error: ${code})`);
-        messages.push({ role: 'system', content: 'Houve um erro do provedor. Replaneje cuidadosamente e continue a tarefa.' });
-        continue; // tenta novamente no próximo loop
+// ====== Utilitários de ambiente para o processo filho
+function buildExecEnv(extra = {}) {
+  const env = { ...process.env };
+  if (STRIP_SECRETS) {
+    for (const k of Object.keys(env)) {
+      if (/^(AWS_|GCP_|GOOGLE_|AZURE_|OPENAI_|SUPABASE_|POSTGRES_|NEON_|TURSO_|MONGO_|MYSQL_|SENTRY_|NEWRELIC_)/i.test(k)) {
+        delete env[k];
       }
-      throw e;
     }
+  }
+  return {
+    PATH: env.PATH,
+    HOME: env.HOME,
+    LANG: env.LANG || 'en_US.UTF-8',
+    TERM: env.TERM || 'xterm-256color',
+    ...extra
+  };
+}
 
-    const msg = resp.choices[0].message;
-    if (msg.content) console.log(`[AI] ${msg.content}`);
+// ====== Inspeções de segurança
+function extractRmRfTargets(command) {
+  const m = [];
+  const rx = /rm\s+-rf\s+([^;&|]+)/gi;
+  let r;
+  while ((r = rx.exec(command)) !== null) {
+    const raw = String(r[1]).trim().replace(/^['"]|['"]$/g, '');
+    if (raw) m.push(raw);
+  }
+  return m;
+}
 
-    // *** CRÍTICO: empilhar a MENSAGEM COMPLETA (com tool_calls) ***
-    messages.push(msg);
+function checkAllowed(command, cwd) {
+  const cmd = String(command || '').trim();
+  if (!cmd) return { ok: false, reason: 'empty-command' };
+  if (!SAFE_MODE) return { ok: true };
 
-    const calls = msg.tool_calls ?? [];
-    if (!calls.length) return resp; // terminou
+  // padrões proibidos
+  for (const fn of denyFns) {
+    if (fn(cmd)) return { ok: false, reason: 'denied-by-pattern', details: 'match in denylist' };
+  }
 
-    let roundFailed = false;
-
-    for (const call of calls) {
-      const fn = call.function?.name;
-      const argStr = call.function?.arguments || '{}';
-      const tool_call_id = call.id;
-
-      let args = {};
-      try { args = JSON.parse(argStr); } catch {}
-
-      if (fn === 'write_file' && args.content) {
-        editedBytes += Buffer.byteLength(args.content, 'utf8');
-      }
-
-      let output = '';
-      try {
-        if (fn === 'run_shell')            output = JSON.stringify(await run(args.cmd, args.cwd || REPO_DIR));
-        else if (fn === 'write_file')      output = await writeFileSafe(args.path, args.content, args.mode || 'replace');
-        else if (fn === 'read_file')       output = await readFileSafe(args.path, args.maxBytes || 200000);
-        else if (fn === 'git_commit_push') output = await gitCommitPush(args.message || 'agent update');
-        else if (fn === 'deploy_render')   output = await deployRender();
-        else if (fn === 'deploy_netlify')  output = await deployNetlify(args.dir);
-        else                               output = `unknown tool: ${fn}`;
-      } catch (e) {
-        output = `tool error: ${e?.message || String(e)}`;
-      }
-
-      if (toolOutputIndicatesFailure(output)) roundFailed = true;
-
-      messages.push({ role: 'tool', tool_call_id, content: output });
-    }
-
-    if (roundFailed) failures++;
-
-    // Auto-switch por falhas/bytes
-    if ((failures >= ERR_LIMIT || editedBytes >= BYTE_LIMIT) && currentModel !== MODEL_SMART) {
-      currentModel = MODEL_SMART;
-      console.log(`[AI] [switch] escalando para ${MODEL_SMART} (motivo: ${failures >= ERR_LIMIT ? 'falhas' : 'edição grande'})`);
-      messages.push({ role: 'system', content: 'A partir de agora use um raciocínio mais cuidadoso e detalhado. Continue a tarefa.' });
+  // rm -rf fora das pastas permitidas
+  const targets = extractRmRfTargets(cmd);
+  for (const t of targets) {
+    const isWinAbs = /^[a-zA-Z]:\\/.test(t);
+    const isPosixAbs = t.startsWith('/');
+    const targetAbs = isWinAbs || isPosixAbs ? path.resolve(t) : path.resolve(cwd, t);
+    if (!insideAllowed(targetAbs)) {
+      return { ok: false, reason: 'rmrf-outside-allowed', details: targetAbs };
     }
   }
 
-  throw new Error('maxSteps reached');
+  // allowlist (se houver)
+  if (allowFns.length > 0) {
+    const allowed = allowFns.some(fn => fn(cmd));
+    if (!allowed) return { ok: false, reason: 'blocked-by-allowlist' };
+  }
+
+  // cd foo && ... não pode sair das pastas permitidas
+  const cdRx = /(?:^|[;&|])\s*cd\s+([^;&|]+)/gi;
+  let m;
+  while ((m = cdRx.exec(cmd)) !== null) {
+    const raw = String(m[1]).trim().replace(/^['"]|['"]$/g, '');
+    const abs = path.resolve(cwd, raw);
+    if (!insideAllowed(abs)) return { ok: false, reason: 'cd-outside-allowed', details: abs };
+  }
+
+  return { ok: true };
 }
 
-// ---------- CLI ----------
-if (process.argv[1] === new URL(import.meta.url).pathname) {
-  const task = process.argv.slice(2).join(' ') || 'Crie rota /health no Express e rode npm start.';
-  console.log('> Task:', task);
-  await runTask(task);
+// ====== Policy para debug
+export function getPolicy() {
+  return {
+    SAFE_MODE, DRY_RUN,
+    REPO_DIR, AGENT_ROOT,
+    MAX_TIMEOUT_MS, MAX_OUTPUT_BYTES, STRIP_SECRETS,
+    allow: ALLOW,
+    deny: [...DEFAULT_DENY, ...EXTRA_DENY],
+    ALLOWED_DIRS: getAllowedDirs()
+  };
 }
+
+// ====== Execução segura
+export async function runShellSecure(command, opts = {}) {
+  // Aceita opts.cwd (antigo) e opts.cwdDir (novo)
+  const wantedCwd = path.resolve(opts.cwd || opts.cwdDir || REPO_DIR);
+
+  if (!insideAllowed(wantedCwd)) {
+    if (opts.onStderr) opts.onStderr(`[denied] cwd-outside-allowed :: ${wantedCwd}\n`);
+    return { ok: false, denied: true, reason: 'cwd-outside-allowed', details: wantedCwd, exitCode: 126, stdout: '', stderr: '' };
+  }
+
+  const check = checkAllowed(command, wantedCwd);
+  if (!check.ok) {
+    const msg = `[denied] ${check.reason}${check.details ? ' :: ' + check.details : ''}\n`;
+    if (opts.onStderr) opts.onStderr(msg);
+    return { ok: false, denied: true, reason: check.reason, details: check.details, exitCode: 126, stdout: '', stderr: msg };
+  }
+
+  if (DRY_RUN || opts.dryRun) {
+    if (opts.onStdout) opts.onStdout(`[dry-run] ${command}\n`);
+    return { ok: true, dryRun: true, exitCode: 0, stdout: '', stderr: '' };
+  }
+
+  const timeout   = Math.max(1_000, Math.min(10 * 60_000, Number(opts.timeoutMs || MAX_TIMEOUT_MS)));
+  const maxBuffer = Math.max(64 * 1024, Math.min(50 * 1024 * 1024, Number(opts.maxBuffer || MAX_OUTPUT_BYTES)));
+
+  const child = execaCommand(command, {
+    cwd: wantedCwd,
+    shell: true,
+    reject: false,
+    timeout,
+    killSignal: 'SIGKILL',
+    maxBuffer,
+    env: buildExecEnv(opts.env),
+    windowsHide: true
+  });
+
+  if (opts.onStdout && child.stdout) child.stdout.on('data', (c) => opts.onStdout(String(c)));
+  if (opts.onStderr && child.stderr) child.stderr.on('data', (c) => opts.onStderr(String(c)));
+
+  const res = await child;
+  const { exitCode, stdout, stderr, timedOut } = res;
+  return { ok: exitCode === 0, exitCode, stdout, stderr, timedOut: !!timedOut };
+}
+
+// ====== File helpers (intencionalmente restritos ao REPO_DIR)
+export async function writeFileSafe(relPath, content, { createDirs = true, mode } = {}) {
+  const abs = path.resolve(REPO_DIR, relPath);
+  // mantemos file helpers restritos ao repo principal
+  if (!abs.startsWith(REPO_DIR + path.sep) && abs !== REPO_DIR) {
+    throw Object.assign(new Error('path-outside-repo'), { code: 'PATH_OUTSIDE_REPO', abs });
+  }
+  if (createDirs) await fs.mkdir(path.dirname(abs), { recursive: true });
+  await fs.writeFile(abs, content, { encoding: 'utf8', mode });
+  return abs;
+}
+
+export async function readFileSafe(relPath, encoding = 'utf8') {
+  const abs = path.resolve(REPO_DIR, relPath);
+  if (!abs.startsWith(REPO_DIR + path.sep) && abs !== REPO_DIR) {
+    throw Object.assign(new Error('path-outside-repo'), { code: 'PATH_OUTSIDE_REPO', abs });
+  }
+  return fs.readFile(abs, encoding);
+}
+
+export async function pathExists(relPath) {
+  const abs = path.resolve(REPO_DIR, relPath);
+  if (!abs.startsWith(REPO_DIR + path.sep) && abs !== REPO_DIR) return false;
+  try { await fs.access(abs); return true; } catch { return false; }
+}
+
+// Pequeno util para comandos seguros padrão
+export const DEFAULT_ALLOW_SNIPPETS = [
+  'git ', 'npm ', 'pnpm ', 'yarn ', 'node ',
+  'ls', 'cat ', 'echo ', 'find ', 'sed ', 'awk ', 'grep ', 'mv ', 'cp ', 'mkdir ', 'rmdir '
+];
