@@ -1,0 +1,21 @@
+--- TEXT SNAPSHOTS ---
+import logger from "./src/logger.mjs"
+import express from "express";
+import "dotenv/config";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { runShellSecure, getPolicy } from "./agent.mjs";
+
+// ====== CONFIG ======
+const PORT = Number(process.env.AGENT_PORT || process.env.PORT || 7777);
+const REPO_DIR = process.env.REPO_DIR || process.cwd();
+const TOKEN = (process.env.AGENT_TOKEN || "").trim();
+
+// Caminho raiz do AGENTE (pasta onde está este arquivo)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const AGENT_ROOT = __dirname;
+
+// ====== APP ======

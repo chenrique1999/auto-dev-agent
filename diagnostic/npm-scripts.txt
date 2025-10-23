@@ -1,0 +1,10 @@
+--- NPM SCRIPTS ---
+{
+  "start": "node server.mjs",
+  "dev": "node --watch server.mjs",
+  "agent": "node agent.mjs",
+  "test": "node --test",
+  "test:api": "node --test tests/api.test.cjs",
+  "doctor": "node scripts/doctor.mjs",
+  "fix:auth": "node scripts/fix-auth.mjs"
+}

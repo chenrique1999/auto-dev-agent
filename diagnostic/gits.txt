@@ -1,0 +1,78 @@
+--- GIT STATUS ---
+On branch chore/hardening-and-dx-202510091420
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .DS_Store
+	deleted:    Arquivo.zip
+	deleted:    Dockerfile.bak
+	deleted:    agent-bundle-20251009-214851.zip
+	deleted:    agent-bundle-20251009-214851/diagnostics/env.txt
+	deleted:    agent-bundle-20251009-214851/diagnostics/git-branch.txt
+	deleted:    agent-bundle-20251009-214851/diagnostics/git-last-commit.txt
+	deleted:    agent-bundle-20251009-214851/diagnostics/git-status.txt
+	deleted:    agent-bundle-20251009-214851/diagnostics/npm-scripts.json
+	deleted:    agent-bundle-20251009-214851/diagnostics/tree.txt
+	deleted:    agent-bundle-20251009-214851/project-src.tar.gz
+	deleted:    docker-compose.yml.bak
+	deleted:    novobundle.zip
+	deleted:    novobundle/diagnostics/env.txt
+	deleted:    novobundle/diagnostics/git-branch.txt
+	deleted:    novobundle/diagnostics/git-last-commit.txt
+	deleted:    novobundle/diagnostics/git-status.txt
+	deleted:    novobundle/diagnostics/npm-scripts.json
+	deleted:    novobundle/diagnostics/tree.txt
+	deleted:    novobundle/project-src.tar.gz
+	modified:   package-lock.json
+	modified:   package.json
+	deleted:    package.json.bak
+	modified:   server.mjs
+	deleted:    server.mjs.bak
+	deleted:    server.mjs.bak.1760021287
+	deleted:    test/api.test.cjs
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.workspaces.json
+	backups/
+	bundle.zip
+	bundle/
+	diagnostic/
+	pens/
+	scripts/bundle.mjs
+	scripts/codepen-importar.mjs
+	scripts/codepen-importer.bak.mjs
+	scripts/codepen-importer.cjs
+	scripts/codepen-utils.mjs
+	src/logger.mjs
+
+no changes added to commit (use "git add" and/or "git commit -a")
+commit bd5a7f31f70aa3257a23ca95f4d8e884600ade85
+Author: Seu Nome <seu-email-no-github@exemplo.com>
+Date:   Fri Oct 10 22:42:48 2025 -0300
+
+    chore: reorganiza estrutura de arquivos com organize.mjs
+
+commit 5af051a51c9b93e00577801a82c5b6b80cc5632b
+Author: Seu Nome <seu-email-no-github@exemplo.com>
+Date:   Thu Oct 9 14:30:01 2025 -0300
+
+    chore(ignore): git/docker ignore robustos e untrack node_modules
+
+commit e732572c15c0253dabc61f9461fbda95d1a109c7
+Author: Seu Nome <seu-email-no-github@exemplo.com>
+Date:   Thu Oct 9 14:24:28 2025 -0300
+
+    chore(pkg): scripts de dev/test; eslint/prettier config; deps instaladas
+
+commit b5233d1d5e09fea26e24570090256689db6ada1a
+Author: Seu Nome <seu-email-no-github@exemplo.com>
+Date:   Thu Oct 9 14:18:17 2025 -0300
+
+    chore(compose): publicar 7777 e healthcheck
+
+commit 3b66a6a40efda150d48cc84f6590b9b3b72aed0c
+Author: Seu Nome <seu-email-no-github@exemplo.com>
+Date:   Thu Oct 9 14:18:17 2025 -0300
+
+    chore(docker): porta 7777 e execução não-root

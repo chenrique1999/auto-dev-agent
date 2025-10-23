@@ -1,5 +1,0 @@
-commit 5af051a51c9b93e00577801a82c5b6b80cc5632b
-Author: Seu Nome <seu-email-no-github@exemplo.com>
-Date:   Thu Oct 9 14:30:01 2025 -0300
-
-    chore(ignore): git/docker ignore robustos e untrack node_modules
